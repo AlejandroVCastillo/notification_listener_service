@@ -5,6 +5,7 @@ import static notification.listener.service.models.ActionCache.cachedNotificatio
 
 import android.annotation.SuppressLint;
 import android.app.Notification;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -45,9 +46,124 @@ public class NotificationListener extends NotificationListenerService {
         instance = this;
     }
 
+    private static final String TAG = "NotificationListener";
+    
+    // Estado de conexión del listener - accesible desde el plugin
+    public static boolean isConnected = false;
+    
+    // Timestamp de última conexión para debugging
+    public static long lastConnectedTime = 0;
+    public static long lastDisconnectedTime = 0;
+
+    /**
+     * Llamado cuando el listener se conecta correctamente al sistema.
+     * Xiaomi puede llamar esto múltiples veces si reconecta el servicio.
+     */
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        isConnected = true;
+        lastConnectedTime = System.currentTimeMillis();
+        Log.i(TAG, "✅ Listener CONECTADO correctamente al sistema");
+        
+        // Notificar a Flutter sobre la conexión
+        Intent intent = new Intent(NotificationConstants.INTENT);
+        intent.putExtra("connection_event", true);
+        intent.putExtra("is_connected", true);
+        intent.putExtra("timestamp", lastConnectedTime);
+        sendBroadcast(intent);
+    }
+
+    /**
+     * Llamado cuando el sistema desconecta el listener.
+     * En Xiaomi esto puede pasar silenciosamente - aquí intentamos reconectar.
+     */
+    @Override
+    public void onListenerDisconnected() {
+        super.onListenerDisconnected();
+        isConnected = false;
+        lastDisconnectedTime = System.currentTimeMillis();
+        Log.w(TAG, "⚠️ Listener DESCONECTADO por el sistema - Intentando reconectar...");
+        
+        // Notificar a Flutter sobre la desconexión
+        Intent intent = new Intent(NotificationConstants.INTENT);
+        intent.putExtra("connection_event", true);
+        intent.putExtra("is_connected", false);
+        intent.putExtra("timestamp", lastDisconnectedTime);
+        sendBroadcast(intent);
+        
+        // Intentar reconexión automática (API 24+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            try {
+                requestRebind(new ComponentName(this, NotificationListener.class));
+                Log.i(TAG, "🔄 Solicitando reconexión con requestRebind()...");
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Error al solicitar reconexión: " + e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Método estático para forzar reconexión desde el Plugin.
+     * Implementa el "Toggle del Componente" recomendado para Xiaomi.
+     */
+    public static void reconnectService(Context context) {
+        try {
+            PackageManager pm = context.getPackageManager();
+            ComponentName componentName = new ComponentName(context, NotificationListener.class);
+            
+            Log.i(TAG, "🔄 Iniciando Toggle del Componente para reconectar...");
+            
+            // 1. Deshabilitar el componente
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                PackageManager.DONT_KILL_APP
+            );
+            
+            // Pequeña pausa para asegurar que el sistema procese el cambio
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                // Ignorar
+            }
+            
+            // 2. Habilitar el componente inmediatamente
+            pm.setComponentEnabledSetting(
+                componentName,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP
+            );
+            
+            Log.i(TAG, "✅ Toggle completado - El sistema debería reconectar el listener");
+            
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Error en reconnectService: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Verifica si el listener puede obtener notificaciones activas.
+     * Este es el test real de si el "binder" está vivo o muerto.
+     */
+    public boolean isBinderAlive() {
+        try {
+            StatusBarNotification[] activeNotifications = getActiveNotifications();
+            return activeNotifications != null;
+        } catch (Exception e) {
+            Log.w(TAG, "Binder parece estar muerto: " + e.getMessage());
+            return false;
+        }
+    }
+
     @RequiresApi(api = VERSION_CODES.KITKAT)
     @Override
     public void onNotificationPosted(StatusBarNotification notification) {
+        // Actualizar estado de conexión - si recibimos notificaciones, estamos conectados
+        if (!isConnected) {
+            isConnected = true;
+            Log.i(TAG, "📥 Notificación recibida - Actualizando estado a CONECTADO");
+        }
         handleNotification(notification, false);
     }
 
@@ -58,7 +174,8 @@ public class NotificationListener extends NotificationListenerService {
     }
 
     @RequiresApi(api = VERSION_CODES.KITKAT)
-    private void handleNotification(StatusBarNotification notification, boolean isRemoved) {
+private void handleNotification(StatusBarNotification notification, boolean isRemoved) {
+    try {
         String packageName = notification.getPackageName();
         Bundle extras = notification.getNotification().extras;
         boolean isOngoing = (notification.getNotification().flags & Notification.FLAG_ONGOING_EVENT) != 0;
@@ -87,25 +204,58 @@ public class NotificationListener extends NotificationListenerService {
             CharSequence title = extras.getCharSequence(Notification.EXTRA_TITLE);
             CharSequence text = extras.getCharSequence(Notification.EXTRA_TEXT);
 
-            intent.putExtra(NotificationConstants.NOTIFICATION_TITLE, title == null ? null : title.toString());
-            intent.putExtra(NotificationConstants.NOTIFICATION_CONTENT, text == null ? null : text.toString());
+            // Limitar tamaño del texto para evitar TransactionTooLargeException
+            String safeTitle = (title == null) ? null : 
+                (title.length() > 100 ? title.subSequence(0, 100) + "..." : title.toString());
+            
+            String safeText = (text == null) ? null : 
+                (text.length() > 500 ? text.subSequence(0, 500) + "..." : text.toString());
+                
+            intent.putExtra(NotificationConstants.NOTIFICATION_TITLE, safeTitle);
+            intent.putExtra(NotificationConstants.NOTIFICATION_CONTENT, safeText);
             intent.putExtra(NotificationConstants.IS_REMOVED, isRemoved);
-            intent.putExtra(NotificationConstants.HAVE_EXTRA_PICTURE, extras.containsKey(Notification.EXTRA_PICTURE));
+            
+            // Solo incluir imagen si la notificación no es demasiado grande
+            boolean containsImage = extras.containsKey(Notification.EXTRA_PICTURE);
+            intent.putExtra(NotificationConstants.HAVE_EXTRA_PICTURE, containsImage);
 
-            if (extras.containsKey(Notification.EXTRA_PICTURE)) {
-                Bitmap bmp = (Bitmap) extras.get(Notification.EXTRA_PICTURE);
-                if (bmp != null) {
-                    ByteArrayOutputStream stream = new ByteArrayOutputStream();
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, stream);
-                    intent.putExtra(NotificationConstants.EXTRAS_PICTURE, stream.toByteArray());
-                } else {
-                    Log.w("NotificationListener", "Notification.EXTRA_PICTURE exists but is null.");
+            if (containsImage) {
+                try {
+                    Bitmap bmp = (Bitmap) extras.get(Notification.EXTRA_PICTURE);
+                    if (bmp != null) {
+                        // Reducir tamaño de imagen si es muy grande
+                        Bitmap scaledBmp = bmp;
+                        if (bmp.getWidth() > 300 || bmp.getHeight() > 300) {
+                            int maxSize = 300;
+                            float ratio = Math.min(
+                                (float) maxSize / bmp.getWidth(),
+                                (float) maxSize / bmp.getHeight()
+                            );
+                            int width = Math.round(bmp.getWidth() * ratio);
+                            int height = Math.round(bmp.getHeight() * ratio);
+                            scaledBmp = Bitmap.createScaledBitmap(bmp, width, height, true);
+                        }
+                        
+                        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+                        scaledBmp.compress(Bitmap.CompressFormat.JPEG, 70, stream);
+                        byte[] imageData = stream.toByteArray();
+                        
+                        // Solo incluir si no es demasiado grande
+                        if (imageData.length < 200000) { // 200KB límite
+                            intent.putExtra(NotificationConstants.EXTRAS_PICTURE, imageData);
+                        }
+                    }
+                } catch (Exception e) {
+                    // Ignorar errores de procesamiento de imagen
+                    Log.e("NotificationListener", "Error procesando imagen: " + e.getMessage());
                 }
             }
         }
         sendBroadcast(intent);
+    } catch (Exception e) {
+        Log.e("NotificationListener", "Error en handleNotification: " + e.getMessage());
     }
-
+}
 
     public byte[] getAppIcon(String packageName) {
         try {

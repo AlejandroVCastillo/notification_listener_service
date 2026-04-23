@@ -5,11 +5,16 @@ import static notification.listener.service.NotificationUtils.isPermissionGrante
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.PendingIntent;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
+import android.service.notification.NotificationListenerService;
 import android.util.Log;
 import android.content.ActivityNotFoundException;
 import androidx.annotation.NonNull;
@@ -26,8 +31,6 @@ import io.flutter.plugin.common.MethodChannel.Result;
 import io.flutter.plugin.common.PluginRegistry;
 import notification.listener.service.models.Action;
 import notification.listener.service.models.ActionCache;
-import android.annotation.SuppressLint;
-import android.os.Build;
 
 import java.util.List;
 import java.util.Map;
@@ -83,6 +86,45 @@ public class NotificationListenerServicePlugin implements FlutterPlugin, Activit
             } catch (PendingIntent.CanceledException e) {
                 result.success(false);
                 e.printStackTrace();
+            }
+        } else if (call.method.equals("isServiceConnected")) {
+            // Verificar si el listener está conectado
+            result.success(NotificationListener.isConnected);
+        } else if (call.method.equals("getConnectionStatus")) {
+            // Obtener estado detallado de conexión
+            java.util.HashMap<String, Object> status = new java.util.HashMap<>();
+            status.put("isConnected", NotificationListener.isConnected);
+            status.put("lastConnectedTime", NotificationListener.lastConnectedTime);
+            status.put("lastDisconnectedTime", NotificationListener.lastDisconnectedTime);
+            result.success(status);
+        } else if (call.method.equals("reconnectService")) {
+            // Forzar reconexión del servicio (Toggle del Componente)
+            try {
+                Log.i("NotificationPlugin", "🔄 Solicitando reconexión desde Flutter...");
+                NotificationListener.reconnectService(context);
+                
+                // Esperar un poco y devolver el nuevo estado
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    result.success(true);
+                }, 500);
+            } catch (Exception e) {
+                Log.e("NotificationPlugin", "Error en reconnectService: " + e.getMessage());
+                result.error("RECONNECT_ERROR", e.getMessage(), null);
+            }
+        } else if (call.method.equals("forceRequestRebind")) {
+            // Solicitar rebind usando la API oficial de Android (API 24+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                try {
+                    ComponentName componentName = new ComponentName(context, NotificationListener.class);
+                    NotificationListenerService.requestRebind(componentName);
+                    Log.i("NotificationPlugin", "🔄 requestRebind ejecutado correctamente");
+                    result.success(true);
+                } catch (Exception e) {
+                    Log.e("NotificationPlugin", "Error en forceRequestRebind: " + e.getMessage());
+                    result.error("REBIND_ERROR", e.getMessage(), null);
+                }
+            } else {
+                result.error("API_LEVEL", "requestRebind requiere API 24+", null);
             }
         } else if (call.method.equals("getActiveNotifications")) {
             NotificationListener service = NotificationListener.getInstance();
