@@ -111,6 +111,7 @@ class ServiceNotificationEvent {
       content: $content
       hasRemoved: $hasRemoved
       haveExtraPicture: $haveExtraPicture
+      extras: ${extras?.toString() ?? ""}
       onGoing: $onGoing
       ''';
   }
