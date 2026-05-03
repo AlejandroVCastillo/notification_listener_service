@@ -51,6 +51,9 @@ class ServiceNotificationEvent {
   /// the content of the notification
   String? content;
 
+  /// raw notification extras from Android
+  Map<String, dynamic>? extras;
+
   /// if the notification is ongoing (cannot be dismissed and is in progress)
   bool? onGoing;
 
@@ -62,6 +65,7 @@ class ServiceNotificationEvent {
     this.extrasPicture,
     this.packageName,
     this.title,
+    this.extras,
     this.appIcon,
     this.largeIcon,
     this.content,
@@ -80,6 +84,7 @@ class ServiceNotificationEvent {
     largeIcon = map['largeIcon'];
     content = map['content'];
     onGoing = map['onGoing'];
+    extras = map['extras'] != null ? Map<String, dynamic>.from(map['extras']) : null;
   }
 
   /// send a direct message reply to the incoming notification

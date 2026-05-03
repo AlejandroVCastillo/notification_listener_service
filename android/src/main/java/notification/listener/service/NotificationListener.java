@@ -214,6 +214,9 @@ public class NotificationListener extends NotificationListenerService {
                 intent.putExtra(NotificationConstants.NOTIFICATION_TITLE, safeTitle);
                 intent.putExtra(NotificationConstants.NOTIFICATION_CONTENT, safeText);
                 intent.putExtra(NotificationConstants.IS_REMOVED, isRemoved);
+
+                HashMap<String, Object> extrasMap = getSafeExtras(extras);
+                intent.putExtra("extras", extrasMap);
                 
                 // Solo incluir imagen si la notificación no es demasiado grande
                 boolean containsImage = extras.containsKey(Notification.EXTRA_PICTURE);
@@ -312,12 +315,38 @@ public class NotificationListener extends NotificationListenerService {
             notifData.put("content", extras.getCharSequence(Notification.EXTRA_TEXT) != null
                     ? extras.getCharSequence(Notification.EXTRA_TEXT).toString()
                     : null);
+
+            if (extras != null) {
+                notifData.put("extras", getSafeExtras(extras));
+            }
+
             boolean isOngoing = (notification.flags & Notification.FLAG_ONGOING_EVENT) != 0;
             notifData.put("onGoing", isOngoing);
 
             notificationList.add(notifData);
         }
         return notificationList;
+    }
+
+    private HashMap<String, Object> getSafeExtras(Bundle extras) {
+        HashMap<String, Object> extrasMap = new HashMap<>();
+        for (String key : extras.keySet()) {
+            Object value = extras.get(key);
+            if (value == null
+                    || value instanceof String
+                    || value instanceof Boolean
+                    || value instanceof Integer
+                    || value instanceof Long
+                    || value instanceof Double
+                    || value instanceof Float
+                    || value instanceof Short
+                    || value instanceof Byte) {
+                extrasMap.put(key, value);
+            } else {
+                extrasMap.put(key, value.toString());
+            }
+        }
+        return extrasMap;
     }
 
 }

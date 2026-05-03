@@ -46,6 +46,12 @@ public class NotificationReceiver extends BroadcastReceiver {
             deleteFileSafely(notificationExtrasPictureFilePath);
         }
 
+        Object rawExtras = intent.getSerializableExtra("extras");
+        HashMap<String, Object> extrasMap = null;
+        if (rawExtras instanceof HashMap) {
+            extrasMap = (HashMap<String, Object>) rawExtras;
+        }
+
         HashMap<String, Object> data = new HashMap<>();
         data.put("id", id);
         data.put("packageName", packageName);
@@ -58,6 +64,7 @@ public class NotificationReceiver extends BroadcastReceiver {
         data.put("hasRemoved", hasRemoved);
         data.put("canReply", canReply);
         data.put("onGoing", isOngoing);
+        data.put("extras", extrasMap);
 
         eventSink.success(data);
     }
